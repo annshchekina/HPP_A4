@@ -6,23 +6,22 @@
 #include <sys/time.h>
 #include "quadtree.h"
 
-int N = 5;
+#define TREE_TEST	0
 
-// 0x5 child address appears out of nowhere, it passes != NULL test and when we access its fields as if it was a struct we get a segmentation fault
-// never a problem on linux
-// 0x5 never appears in addresses returned by malloc
+const int N = 5;
 
-// indexes show which stars from the array belong to the region
-void create_q_tree(int level, q_node_t ** curr_node, 
-	const double * x_coords, const double * y_coords, 
-	const double * masses, const int * indexes, int num_stars) 
+// indexes - star numbers from the array in the region
+// stars pointer passed stays the same
+void create_q_tree(const int level, q_node_t ** curr_node, 
+	const star_t * stars, const int * indexes, const int num_stars) 
 {	
 	if (*curr_node == NULL)
 	{
 		if (level != 0) return;
-		// initialize
+
 		*curr_node = (q_node_t *)malloc(sizeof(q_node_t));
-		assert(*curr_node != NULL);	
+		assert(*curr_node != NULL);
+	
 		for (int i = 0; i < 4; i++)
 		{
 			if (i%2 == 0) 
@@ -31,49 +30,51 @@ void create_q_tree(int level, q_node_t ** curr_node,
 				(*curr_node)->border[i] = 1;
 		}			
 	}
-	
+		
+	for (int i = 0; i < 4; i++) 
+		(*curr_node)->child[i] = NULL;
+
 	if (num_stars == 1) 
 	{
-		printf("(%lf, %lf) with mass %lf to (%lf, %lf) x (%lf, %lf) on level %d\n", 
-			x_coords[indexes[0]], y_coords[indexes[0]], masses[indexes[0]],
+		#if TREE_TEST
+		printf("Star (%lf, %lf) to (%lf, %lf) x (%lf, %lf) on level %d\n", 
+			stars[indexes[0]].x, stars[indexes[0]].y,
 			(*curr_node)->border[0], (*curr_node)->border[1], 
 			(*curr_node)->border[2], (*curr_node)->border[3], level);
-					
-		(*curr_node)->mass = masses[0];
-		(*curr_node)->c_mass_x = x_coords[0];
-		(*curr_node)->c_mass_y = y_coords[0];
+		#endif
+		
+		(*curr_node)->mass = stars[indexes[0]].m;
+		(*curr_node)->c_mass_x = stars[indexes[0]].x;
+		(*curr_node)->c_mass_y = stars[indexes[0]].y;
+		(*curr_node)->internal = 0;
 		return;
 	}
 	
-	// calculate the center of mass
+	// center of mass
 	double total_mass = 0, c_mass_x = 0, c_mass_y = 0;
 	for (int i = 0; i < num_stars; i++) 
 	{
 		int arr_idx = indexes[i];
-		double mass = masses[arr_idx];
+		double mass = stars[arr_idx].m;
 		total_mass += mass;
-		c_mass_x += mass * x_coords[arr_idx];
-		c_mass_y += mass * y_coords[arr_idx];
+		c_mass_x += mass * stars[arr_idx].x;
+		c_mass_y += mass * stars[arr_idx].y;
 	}
 	(*curr_node)->mass = total_mass;
 	(*curr_node)->c_mass_x = c_mass_x / total_mass;
 	(*curr_node)->c_mass_y = c_mass_y / total_mass;
 	
-	printf("Center (%lf, %lf) on level %d\n", 
-		(*curr_node)->c_mass_x, (*curr_node)->c_mass_y, level);
+	(*curr_node)->internal = 1;
 	
-	int * child_indexes[4]; 	
-	int child_num_stars[4];
-	for (int i = 0; i < 4; i++) 
-	{
-		// !!!!!!!!!!!!!!!!!!
-		(*curr_node)->child[i] = NULL;
-		// !!!!!!!!!!!!!!!!!!
-		child_num_stars[i] = 0;
-		child_indexes[i] = malloc(num_stars * sizeof(int));
-	}
+	#if TREE_TEST
+	printf("\nCenter (%lf, %lf) with mass %lf on level %d\n\n", 
+		(*curr_node)->c_mass_x, (*curr_node)->c_mass_y, (*curr_node)->mass, level);
+	#endif
 	
-	double d_border[2]; // 0 -- x, 1 -- y, decision border	
+	int child_indexes[4][num_stars]; 	
+	int child_num_stars[4] = {0, 0, 0, 0};
+	
+	double d_border[2]; // 0 - x, 1 - y, decision border	
 	d_border[0] = (*curr_node)->border[1] - 
 		0.5 * ((*curr_node)->border[1] - (*curr_node)->border[0]);
 	d_border[1] = (*curr_node)->border[3] - 
@@ -82,16 +83,16 @@ void create_q_tree(int level, q_node_t ** curr_node,
 	for (int i = 0; i < num_stars; i++) 
 	{	
 		int arr_idx = indexes[i], idx_hit;		
-		if (x_coords[arr_idx] < d_border[0])
+		if (stars[arr_idx].x < d_border[0])
 		{
-			if (y_coords[arr_idx] < d_border[1])
+			if (stars[arr_idx].y < d_border[1])
 				idx_hit = 2;					
 			else 
 				idx_hit = 3;			
 		}
 		else 
 		{
-			if (y_coords[arr_idx] < d_border[1])
+			if (stars[arr_idx].y < d_border[1])
 				idx_hit = 1;			
 			else 
 				idx_hit = 0;		
@@ -100,7 +101,7 @@ void create_q_tree(int level, q_node_t ** curr_node,
 		child_num_stars[idx_hit]++;	
 	}
 	
-	double child_border[4][4]; // first index -- child, second -- as in border 
+	double child_border[4][4]; // first index - child, second - as in border 
 	child_border[0][0] =  d_border[0];
 	child_border[0][1] =  (*curr_node)->border[1];
 	child_border[0][2] =  d_border[1];
@@ -123,63 +124,52 @@ void create_q_tree(int level, q_node_t ** curr_node,
 	
 	for (int i = 0; i < 4; i++) 
 	{
-		if (child_num_stars[i] != 0) // otherwise (*curr_node)->child[i] == NULL
+		// for empty squares (*curr_node)->child[i] == NULL
+		if (child_num_stars[i] != 0) 
 		{
-			// !!!!!!!!!!!!!!!!!!
-			(*curr_node)->child[i] = malloc(sizeof(q_node_t));
+			((*curr_node)->child)[i] = (q_node_t *)malloc(sizeof(q_node_t));
 			assert((*curr_node)->child[i] != NULL);
-			// !!!!!!!!!!!!!!!!!!
+
 			for (int j = 0; j < 4; j++) 
 				(*curr_node)->child[i]->border[j] = child_border[i][j];		
 		}
-		// printf("%p\n", (*curr_node)->child[i]);
 	}
-	// after loop fusion error 11 in delete
 	for (int i = 0; i < 4; i++) 
-	{
 		create_q_tree(level + 1, &((*curr_node)->child[i]), 
-			x_coords, y_coords, masses, child_indexes[i], child_num_stars[i]);
-			
-		free(child_indexes[i]);	
-	}
+			stars, &(child_indexes[i][0]), child_num_stars[i]);				
 }
 
-void delete_q_tree(int level, q_node_t ** curr_node)
+void delete_q_tree(q_node_t ** curr_node)
 {
-	// printf("-----------\nLevel: %d\n%p\n", level, *curr_node);
 	if (*curr_node == NULL) return;
+
 	for(int i = 0; i < 4; i++) 
-	{
-		// when accessing -> error 11
-		//printf("%p\n", (*curr_node)->child[i]);
-		if ((*curr_node)->child[i] != NULL)
-		{
-			// printf("--\n");
-			// printf("%p, at %p\n", (*curr_node)->child[i], &((*curr_node)->child[i]));
-			delete_q_tree(level + 1, &((*curr_node)->child[i]));
-		}
-	}
+		if (((*curr_node)->child)[i] != NULL)
+			delete_q_tree(&(((*curr_node)->child)[i]));
 		
 	free(*curr_node);
+	*curr_node = NULL;
 }
 
+#if TREE_TEST
 int main()
 {
-	double x_arr[N], y_arr[N], mass[N];
+	star_t stars[N];
 	int indexes[N];
+
 	for (int i = 0; i < N; i++)
 	{
-		x_arr[i] = (float)rand()/(float)RAND_MAX;
-		y_arr[i] = (float)rand()/(float)RAND_MAX;
-		mass[i] = rand() % 10;
-		indexes[i] = i;
-		printf("%d: (%lf, %lf) with mass %lf\n", i, x_arr[i], y_arr[i], mass[i]);
+		stars[i].x = (float)rand()/(float)RAND_MAX;
+		stars[i].y = (float)rand()/(float)RAND_MAX;
+		stars[i].m = rand() % 10;
+		indexes[i] = i; // shows which stars from the array belong to the region, init 0 level
+		printf("%d: (%lf, %lf) with mass %lf\n", i, stars[i].x, stars[i].y, stars[i].m);
 	}
 	
-	q_node_t * head_q = NULL;
-	
-	create_q_tree(0, &head_q, x_arr, y_arr, mass, indexes, N);
-	delete_q_tree(0, &head_q);
+	q_node_t * head_q = NULL;	
+	create_q_tree(0, &head_q, stars, indexes, N);
+	delete_q_tree(&head_q);
 
 	return 0;
 }
+#endif
